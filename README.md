@@ -9,6 +9,15 @@ Welcome to the future of sports engagement! **BOXMEOUT STELLA** is a groundbreak
 ## Technical Documentation
 **Prepared by:** [techhunter] | **GitHub:** [GoSTEAN] | **Contact:** [Your Email] | **Telegram:** [GoSTEAM]
 
+### Documentation Links
+
+| Document | Description |
+|---|---|
+| [DOAN_DOCS.md](DOAN_DOCS.md) | **DOAN** — Decentralized Oracle Attestation Network: architecture, attestation flow, staking, slashing, and API reference |
+| [backend/API_DOCUMENTATION.md](backend/API_DOCUMENTATION.md) | Full REST API reference with request/response schemas |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Docker-based deployment guide |
+| [contracts/README.md](contracts/README.md) | Soroban smart contract reference |
+
 ## Project Overview
 ### What is the Wrestling Prediction Market?
 The Wrestling Prediction Market is a decentralized, gamified platform built on Stellar that enables users to predict wrestling match outcomes while maintaining privacy through cryptographic commitments. Leveraging Stellar's fast, low-cost transactions and smart contract capabilities via Soroban, the platform combines blockchain transparency with privacy preservation, creating a fair and engaging prediction ecosystem where users can bet on wrestling events, earn rewards, and climb competitive leaderboards without exposing their betting strategies prematurely.
