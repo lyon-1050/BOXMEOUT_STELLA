@@ -4,7 +4,7 @@ use crate::amm;
 use crate::errors::PredictionMarketError;
 use crate::storage::DataKey;
 use crate::types::{
-    AmmPool, Config, Dispute, FeeConfig, LpPosition, Market, MarketMetadata, MarketStats,
+    AmmPool, Config, Dispute, DisputeStatus, FeeConfig, LpPosition, Market, MarketMetadata, MarketStats,
     MarketStatus, OracleReport, Outcome, TradeReceipt, UserPosition,
 };
 use crate::events;
@@ -711,7 +711,7 @@ impl PredictionMarketContract {
 
         // Betting time must not have passed
         if market.betting_close_time <= env.ledger().timestamp() {
-            return Err(PredictionMarketError::ResolutionDeadlinePassed); // Use appropriate error for betting closed
+            return Err(PredictionMarketError::BettingClosed);
         }
 
         market.status = crate::types::MarketStatus::Open;
@@ -1186,7 +1186,72 @@ impl PredictionMarketContract {
         upheld: bool,
         final_outcome_id: Option<u32>,
     ) -> Result<(), PredictionMarketError> {
-        todo!("Implement admin dispute resolution with bond slash or refund")
+        let config = load_config(&env)?;
+
+        // Require admin auth
+        config.admin.require_auth();
+
+        // Load market
+        let mut market: Market = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Market(market_id))
+            .ok_or(PredictionMarketError::MarketNotFound)?;
+
+        // Market must be Reported
+        if market.status != MarketStatus::Reported {
+            return Err(PredictionMarketError::MarketNotReported);
+        }
+
+        // Load dispute
+        let dispute_key = DataKey::Dispute(market_id);
+        let mut dispute: Dispute = env
+            .storage()
+            .persistent()
+            .get(&dispute_key)
+            .ok_or(PredictionMarketError::DisputeNotFound)?;
+
+        // Dispute must be Pending
+        if dispute.status != DisputeStatus::Pending {
+            return Err(PredictionMarketError::DisputeAlreadyResolved);
+        }
+
+        let token_client = soroban_sdk::token::TokenClient::new(&env, &config.token);
+
+        if upheld {
+            // Dispute upheld: refund bond to disputer
+            dispute.status = DisputeStatus::Upheld;
+            token_client.transfer(&env.current_contract_address(), &dispute.disputer, &dispute.bond);
+
+            // If final_outcome_id provided, finalize the market
+            if let Some(outcome_id) = final_outcome_id {
+                // Validate outcome_id
+                if (outcome_id as usize) >= market.outcomes.len() as usize {
+                    return Err(PredictionMarketError::InvalidOutcome);
+                }
+
+                market.winning_outcome_id = Some(outcome_id);
+                market.status = MarketStatus::Resolved;
+            } else {
+                // Reset to Closed so oracle can re-report
+                market.status = MarketStatus::Closed;
+            }
+        } else {
+            // Dispute rejected: slash bond to treasury
+            dispute.status = DisputeStatus::Rejected;
+            token_client.transfer(&env.current_contract_address(), &config.treasury, &dispute.bond);
+        }
+
+        // Persist updated dispute and market
+        env.storage().persistent().set(&dispute_key, &dispute);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Market(market_id), &market);
+
+        // Emit event
+        events::dispute_resolved(&env, market_id, upheld, final_outcome_id);
+
+        Ok(())
     }
 
     /// Finalise a market after the dispute window expires with no active dispute.

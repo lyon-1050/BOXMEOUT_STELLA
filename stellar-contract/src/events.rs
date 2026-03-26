@@ -272,7 +272,11 @@ pub fn dispute_resolved(
     upheld: bool,
     final_outcome_id: Option<u32>,
 ) {
-    todo!("Emit dispute_resolved event")
+    #[allow(deprecated)]
+    env.events().publish(
+        (Symbol::new(env, "disp_resolved"), market_id),
+        (market_id, upheld, final_outcome_id),
+    );
 }
 
 // =============================================================================
