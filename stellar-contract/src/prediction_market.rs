@@ -1,5 +1,6 @@
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
+use crate::amm;
 use crate::errors::PredictionMarketError;
 use crate::storage::DataKey;
 use crate::types::{
@@ -142,6 +143,46 @@ fn allocate_market_id(env: &Env) -> Result<u64, PredictionMarketError> {
         .set(&DataKey::NextMarketId, &following_market_id);
 
     Ok(next_market_id)
+}
+
+fn reduce_reserves_proportionally(
+    env: &Env,
+    reserves: &Vec<i128>,
+    collateral_out: i128,
+    total_collateral: i128,
+) -> Result<Vec<i128>, PredictionMarketError> {
+    let mut updated_reserves = Vec::new(env);
+    let mut index = 0;
+
+    while index < reserves.len() {
+        let reserve = reserves.get_unchecked(index);
+        let reserve_reduction = reserve
+            .checked_mul(collateral_out)
+            .ok_or(PredictionMarketError::ArithmeticError)?
+            / total_collateral;
+        let updated_reserve = reserve
+            .checked_sub(reserve_reduction)
+            .ok_or(PredictionMarketError::ArithmeticError)?;
+
+        updated_reserves.push_back(updated_reserve);
+        index += 1;
+    }
+
+    Ok(updated_reserves)
+}
+
+fn compute_invariant_from_reserves(reserves: &Vec<i128>) -> Result<i128, PredictionMarketError> {
+    let mut invariant = 1_i128;
+    let mut index = 0;
+
+    while index < reserves.len() {
+        invariant = invariant
+            .checked_mul(reserves.get_unchecked(index))
+            .ok_or(PredictionMarketError::ArithmeticError)?;
+        index += 1;
+    }
+
+    Ok(invariant)
 }
 
 #[contractimpl]
@@ -798,7 +839,96 @@ impl PredictionMarketContract {
         market_id: u64,
         lp_shares_to_burn: i128,
     ) -> Result<i128, PredictionMarketError> {
-        todo!("Implement remove liquidity / LP share redemption")
+        let config = load_config(&env)?;
+        if is_emergency_paused(&env, &config) {
+            return Err(PredictionMarketError::EmergencyPaused);
+        }
+
+        provider.require_auth();
+
+        let mut market: Market = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Market(market_id))
+            .ok_or(PredictionMarketError::MarketNotFound)?;
+        let mut pool: AmmPool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AmmPool(market_id))
+            .ok_or(PredictionMarketError::PoolNotInitialized)?;
+        let position_key = DataKey::LpPosition(market_id, provider.clone());
+        let mut position: LpPosition = env
+            .storage()
+            .persistent()
+            .get(&position_key)
+            .ok_or(PredictionMarketError::LpPositionNotFound)?;
+
+        if lp_shares_to_burn <= 0 {
+            return Err(PredictionMarketError::ZeroLiquidity);
+        }
+        if lp_shares_to_burn > position.lp_shares {
+            return Err(PredictionMarketError::InsufficientLpShares);
+        }
+
+        let now = env.ledger().timestamp();
+        let can_withdraw = now >= market.betting_close_time
+            || market.status == MarketStatus::Resolved
+            || market.status == MarketStatus::Cancelled;
+        if !can_withdraw {
+            return Err(PredictionMarketError::BettingClosed);
+        }
+
+        if market.total_lp_shares <= 0 || pool.total_collateral <= 0 {
+            return Err(PredictionMarketError::ZeroLiquidity);
+        }
+
+        let collateral_out =
+            amm::calc_collateral_from_lp(&pool, lp_shares_to_burn, market.total_lp_shares);
+        if collateral_out <= 0 {
+            return Err(PredictionMarketError::ZeroLiquidity);
+        }
+
+        let updated_reserves = reduce_reserves_proportionally(
+            &env,
+            &pool.reserves,
+            collateral_out,
+            pool.total_collateral,
+        )?;
+        pool.total_collateral = pool
+            .total_collateral
+            .checked_sub(collateral_out)
+            .ok_or(PredictionMarketError::ArithmeticError)?;
+        pool.reserves = updated_reserves;
+        pool.invariant_k = compute_invariant_from_reserves(&pool.reserves)?;
+
+        position.lp_shares = position
+            .lp_shares
+            .checked_sub(lp_shares_to_burn)
+            .ok_or(PredictionMarketError::ArithmeticError)?;
+        market.total_lp_shares = market
+            .total_lp_shares
+            .checked_sub(lp_shares_to_burn)
+            .ok_or(PredictionMarketError::ArithmeticError)?;
+        market.total_collateral = market
+            .total_collateral
+            .checked_sub(collateral_out)
+            .ok_or(PredictionMarketError::ArithmeticError)?;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::AmmPool(market_id), &pool);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Market(market_id), &market);
+
+        if position.lp_shares == 0 {
+            env.storage().persistent().remove(&position_key);
+        } else {
+            env.storage().persistent().set(&position_key, &position);
+        }
+
+        events::liquidity_removed(&env, market_id, provider, collateral_out, lp_shares_to_burn);
+        Ok(collateral_out)
     }
 
     /// Collect accumulated LP trading fees for a provider's position.
@@ -1341,10 +1471,12 @@ impl PredictionMarketContract {
 mod tests {
     extern crate std;
 
-    use super::{PredictionMarketContract, PredictionMarketContractClient};
+    use super::{build_outcomes, PredictionMarketContract, PredictionMarketContractClient};
     use crate::errors::PredictionMarketError;
     use crate::storage::DataKey;
-    use crate::types::{Config, FeeConfig, Market, MarketMetadata, MarketStats, MarketStatus};
+    use crate::types::{
+        AmmPool, Config, FeeConfig, LpPosition, Market, MarketMetadata, MarketStats, MarketStatus,
+    };
     use soroban_sdk::testutils::{
         Address as _, AuthorizedFunction, AuthorizedInvocation, Events as _, Ledger as _,
     };
@@ -1433,6 +1565,53 @@ mod tests {
                 .persistent()
                 .get(&DataKey::NextMarketId)
                 .expect("next market id should exist")
+        })
+    }
+
+    fn seed_market(env: &Env, contract_id: &Address, market: &Market) {
+        env.as_contract(contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Market(market.market_id), market);
+        });
+    }
+
+    fn seed_pool(env: &Env, contract_id: &Address, pool: &AmmPool) {
+        env.as_contract(contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::AmmPool(pool.market_id), pool);
+        });
+    }
+
+    fn seed_lp_position(env: &Env, contract_id: &Address, position: &LpPosition) {
+        env.as_contract(contract_id, || {
+            env.storage().persistent().set(
+                &DataKey::LpPosition(position.market_id, position.provider.clone()),
+                position,
+            );
+        });
+    }
+
+    fn read_pool(env: &Env, contract_id: &Address, market_id: u64) -> AmmPool {
+        env.as_contract(contract_id, || {
+            env.storage()
+                .persistent()
+                .get(&DataKey::AmmPool(market_id))
+                .expect("pool should exist")
+        })
+    }
+
+    fn read_lp_position(
+        env: &Env,
+        contract_id: &Address,
+        market_id: u64,
+        provider: &Address,
+    ) -> Option<LpPosition> {
+        env.as_contract(contract_id, || {
+            env.storage()
+                .persistent()
+                .get(&DataKey::LpPosition(market_id, provider.clone()))
         })
     }
 
@@ -1858,5 +2037,365 @@ mod tests {
             ),
             Err(Ok(PredictionMarketError::MetadataTooLong))
         );
+    }
+
+    #[test]
+    fn remove_liquidity_rejects_when_emergency_paused() {
+        let env = Env::default();
+        env.ledger().set_timestamp(2_000);
+
+        let contract_id = env.register(PredictionMarketContract, ());
+        let client = PredictionMarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let provider = Address::generate(&env);
+        let config = sample_config(&env, &admin);
+
+        seed_config(&env, &contract_id, &config);
+        seed_emergency_pause(&env, &contract_id, true);
+
+        let market_id = 7_u64;
+        seed_market(
+            &env,
+            &contract_id,
+            &Market {
+                market_id,
+                creator: provider.clone(),
+                question: SorobanString::from_str(&env, "Paused market"),
+                betting_close_time: 1_000,
+                resolution_deadline: 2_000,
+                dispute_window_secs: 3_600,
+                outcomes: build_outcomes(&env, &sample_outcomes(&env)),
+                status: MarketStatus::Open,
+                winning_outcome_id: None,
+                protocol_fee_pool: 0,
+                lp_fee_pool: 0,
+                creator_fee_pool: 0,
+                total_collateral: 1_000,
+                total_lp_shares: 100,
+                metadata: sample_metadata(&env),
+            },
+        );
+        seed_pool(
+            &env,
+            &contract_id,
+            &AmmPool {
+                market_id,
+                reserves: vec![&env, 500_i128, 500_i128],
+                invariant_k: 250_000,
+                total_collateral: 1_000,
+            },
+        );
+        seed_lp_position(
+            &env,
+            &contract_id,
+            &LpPosition {
+                market_id,
+                provider: provider.clone(),
+                lp_shares: 40,
+                collateral_contributed: 400,
+                fees_claimed: 0,
+            },
+        );
+
+        env.mock_all_auths();
+        let result = client.try_remove_liquidity(&provider, &market_id, &20_i128);
+
+        assert_eq!(result, Err(Ok(PredictionMarketError::EmergencyPaused)));
+        assert_eq!(env.events().all(), vec![&env]);
+    }
+
+    #[test]
+    fn remove_liquidity_rejects_missing_position_and_excess_burn() {
+        let env = Env::default();
+        env.ledger().set_timestamp(2_000);
+
+        let contract_id = env.register(PredictionMarketContract, ());
+        let client = PredictionMarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let provider = Address::generate(&env);
+        let config = sample_config(&env, &admin);
+        let market_id = 8_u64;
+
+        seed_config(&env, &contract_id, &config);
+        seed_market(
+            &env,
+            &contract_id,
+            &Market {
+                market_id,
+                creator: provider.clone(),
+                question: SorobanString::from_str(&env, "LP checks"),
+                betting_close_time: 1_500,
+                resolution_deadline: 2_500,
+                dispute_window_secs: 3_600,
+                outcomes: build_outcomes(&env, &sample_outcomes(&env)),
+                status: MarketStatus::Open,
+                winning_outcome_id: None,
+                protocol_fee_pool: 0,
+                lp_fee_pool: 0,
+                creator_fee_pool: 0,
+                total_collateral: 1_000,
+                total_lp_shares: 100,
+                metadata: sample_metadata(&env),
+            },
+        );
+        seed_pool(
+            &env,
+            &contract_id,
+            &AmmPool {
+                market_id,
+                reserves: vec![&env, 500_i128, 500_i128],
+                invariant_k: 250_000,
+                total_collateral: 1_000,
+            },
+        );
+
+        env.mock_all_auths();
+        assert_eq!(
+            client.try_remove_liquidity(&provider, &market_id, &10_i128),
+            Err(Ok(PredictionMarketError::LpPositionNotFound))
+        );
+
+        seed_lp_position(
+            &env,
+            &contract_id,
+            &LpPosition {
+                market_id,
+                provider: provider.clone(),
+                lp_shares: 25,
+                collateral_contributed: 250,
+                fees_claimed: 0,
+            },
+        );
+
+        assert_eq!(
+            client.try_remove_liquidity(&provider, &market_id, &30_i128),
+            Err(Ok(PredictionMarketError::InsufficientLpShares))
+        );
+    }
+
+    #[test]
+    fn remove_liquidity_enforces_locking_rule_before_betting_close() {
+        let env = Env::default();
+        env.ledger().set_timestamp(900);
+
+        let contract_id = env.register(PredictionMarketContract, ());
+        let client = PredictionMarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let provider = Address::generate(&env);
+        let config = sample_config(&env, &admin);
+        let market_id = 9_u64;
+
+        seed_config(&env, &contract_id, &config);
+        seed_market(
+            &env,
+            &contract_id,
+            &Market {
+                market_id,
+                creator: provider.clone(),
+                question: SorobanString::from_str(&env, "Locked pool"),
+                betting_close_time: 1_000,
+                resolution_deadline: 2_000,
+                dispute_window_secs: 3_600,
+                outcomes: build_outcomes(&env, &sample_outcomes(&env)),
+                status: MarketStatus::Open,
+                winning_outcome_id: None,
+                protocol_fee_pool: 0,
+                lp_fee_pool: 0,
+                creator_fee_pool: 0,
+                total_collateral: 1_000,
+                total_lp_shares: 100,
+                metadata: sample_metadata(&env),
+            },
+        );
+        seed_pool(
+            &env,
+            &contract_id,
+            &AmmPool {
+                market_id,
+                reserves: vec![&env, 500_i128, 500_i128],
+                invariant_k: 250_000,
+                total_collateral: 1_000,
+            },
+        );
+        seed_lp_position(
+            &env,
+            &contract_id,
+            &LpPosition {
+                market_id,
+                provider: provider.clone(),
+                lp_shares: 50,
+                collateral_contributed: 500,
+                fees_claimed: 0,
+            },
+        );
+
+        env.mock_all_auths();
+        let result = client.try_remove_liquidity(&provider, &market_id, &10_i128);
+
+        assert_eq!(result, Err(Ok(PredictionMarketError::BettingClosed)));
+    }
+
+    #[test]
+    fn remove_liquidity_updates_pool_market_and_position() {
+        let env = Env::default();
+        env.ledger().set_timestamp(2_000);
+
+        let contract_id = env.register(PredictionMarketContract, ());
+        let client = PredictionMarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let provider = Address::generate(&env);
+        let config = sample_config(&env, &admin);
+        let market_id = 10_u64;
+
+        seed_config(&env, &contract_id, &config);
+        seed_market(
+            &env,
+            &contract_id,
+            &Market {
+                market_id,
+                creator: provider.clone(),
+                question: SorobanString::from_str(&env, "Resolved pool"),
+                betting_close_time: 1_500,
+                resolution_deadline: 2_500,
+                dispute_window_secs: 3_600,
+                outcomes: build_outcomes(&env, &sample_outcomes(&env)),
+                status: MarketStatus::Open,
+                winning_outcome_id: None,
+                protocol_fee_pool: 0,
+                lp_fee_pool: 0,
+                creator_fee_pool: 0,
+                total_collateral: 1_000,
+                total_lp_shares: 100,
+                metadata: sample_metadata(&env),
+            },
+        );
+        seed_pool(
+            &env,
+            &contract_id,
+            &AmmPool {
+                market_id,
+                reserves: vec![&env, 500_i128, 500_i128],
+                invariant_k: 250_000,
+                total_collateral: 1_000,
+            },
+        );
+        seed_lp_position(
+            &env,
+            &contract_id,
+            &LpPosition {
+                market_id,
+                provider: provider.clone(),
+                lp_shares: 40,
+                collateral_contributed: 400,
+                fees_claimed: 0,
+            },
+        );
+
+        env.mock_all_auths();
+        let collateral_out = client.remove_liquidity(&provider, &market_id, &20_i128);
+
+        assert_eq!(collateral_out, 200);
+        assert_eq!(
+            env.auths(),
+            std::vec![(
+                provider.clone(),
+                AuthorizedInvocation {
+                    function: AuthorizedFunction::Contract((
+                        contract_id.clone(),
+                        Symbol::new(&env, "remove_liquidity"),
+                        (&provider, market_id, 20_i128).into_val(&env),
+                    )),
+                    sub_invocations: std::vec![],
+                }
+            )]
+        );
+        assert_eq!(
+            env.events().all(),
+            vec![&env, (
+                contract_id.clone(),
+                vec![
+                    &env,
+                    Symbol::new(&env, "liq_removed").into_val(&env),
+                    market_id.into_val(&env)
+                ],
+                (market_id, provider.clone(), 200_i128, 20_i128).into_val(&env),
+            )]
+        );
+
+        let market = read_market(&env, &contract_id, market_id);
+        assert_eq!(market.total_collateral, 800);
+        assert_eq!(market.total_lp_shares, 80);
+
+        let pool = read_pool(&env, &contract_id, market_id);
+        assert_eq!(pool.total_collateral, 800);
+        assert_eq!(pool.reserves, vec![&env, 400_i128, 400_i128]);
+        assert_eq!(pool.invariant_k, 160_000);
+
+        let position = read_lp_position(&env, &contract_id, market_id, &provider)
+            .expect("position should remain after partial burn");
+        assert_eq!(position.lp_shares, 20);
+    }
+
+    #[test]
+    fn remove_liquidity_removes_position_on_full_burn_and_allows_resolved_market() {
+        let env = Env::default();
+        env.ledger().set_timestamp(500);
+
+        let contract_id = env.register(PredictionMarketContract, ());
+        let client = PredictionMarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let provider = Address::generate(&env);
+        let config = sample_config(&env, &admin);
+        let market_id = 11_u64;
+
+        seed_config(&env, &contract_id, &config);
+        seed_market(
+            &env,
+            &contract_id,
+            &Market {
+                market_id,
+                creator: provider.clone(),
+                question: SorobanString::from_str(&env, "Resolved withdrawal"),
+                betting_close_time: 1_000,
+                resolution_deadline: 2_000,
+                dispute_window_secs: 3_600,
+                outcomes: build_outcomes(&env, &sample_outcomes(&env)),
+                status: MarketStatus::Resolved,
+                winning_outcome_id: Some(0),
+                protocol_fee_pool: 0,
+                lp_fee_pool: 0,
+                creator_fee_pool: 0,
+                total_collateral: 1_000,
+                total_lp_shares: 100,
+                metadata: sample_metadata(&env),
+            },
+        );
+        seed_pool(
+            &env,
+            &contract_id,
+            &AmmPool {
+                market_id,
+                reserves: vec![&env, 500_i128, 500_i128],
+                invariant_k: 250_000,
+                total_collateral: 1_000,
+            },
+        );
+        seed_lp_position(
+            &env,
+            &contract_id,
+            &LpPosition {
+                market_id,
+                provider: provider.clone(),
+                lp_shares: 10,
+                collateral_contributed: 100,
+                fees_claimed: 0,
+            },
+        );
+
+        env.mock_all_auths();
+        let collateral_out = client.remove_liquidity(&provider, &market_id, &10_i128);
+
+        assert_eq!(collateral_out, 100);
+        assert!(read_lp_position(&env, &contract_id, market_id, &provider).is_none());
     }
 }

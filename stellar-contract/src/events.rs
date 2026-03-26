@@ -409,7 +409,11 @@ pub fn liquidity_removed(
     collateral_out: i128,
     lp_shares_burned: i128,
 ) {
-    todo!("Emit liquidity_removed event")
+    #[allow(deprecated)]
+    env.events().publish(
+        (Symbol::new(env, "liq_removed"), market_id),
+        (market_id, provider, collateral_out, lp_shares_burned),
+    );
 }
 
 /// Emitted when an LP provider collects their accumulated trading fees.

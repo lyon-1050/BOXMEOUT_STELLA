@@ -56,7 +56,16 @@ pub fn calc_initial_lp_shares(collateral: i128, n_outcomes: u32) -> i128 {
 /// - Use `math::checked_product` to detect overflow.
 /// - Return the product (k).
 pub fn compute_invariant(reserves: &[i128]) -> i128 {
-    todo!("Compute k = product(reserves_i) for all outcomes")
+    let mut invariant = 1_i128;
+
+    for reserve in reserves {
+        match invariant.checked_mul(*reserve) {
+            Some(value) => invariant = value,
+            None => return 0,
+        }
+    }
+
+    invariant
 }
 
 // =============================================================================
@@ -212,5 +221,12 @@ pub fn calc_collateral_from_lp(
     lp_shares_to_burn: i128,
     total_lp_shares: i128,
 ) -> i128 {
-    todo!("Compute collateral returned when burning LP shares")
+    if pool.total_collateral <= 0 || lp_shares_to_burn <= 0 || total_lp_shares <= 0 {
+        return 0;
+    }
+
+    match pool.total_collateral.checked_mul(lp_shares_to_burn) {
+        Some(value) => value / total_lp_shares,
+        None => 0,
+    }
 }
