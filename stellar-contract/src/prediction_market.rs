@@ -1561,11 +1561,11 @@ impl PredictionMarketContract {
     }
 
     /// Return the global contract configuration.
-    ///
-    /// # TODO
-    /// - Load `DataKey::Config`; return `NotInitialized` if absent.
     pub fn get_config(env: Env) -> Result<Config, PredictionMarketError> {
-        todo!("Implement get_config")
+        env.storage()
+            .instance()
+            .get(&crate::storage::DataKey::Config)
+            .ok_or(PredictionMarketError::NotInitialized)
     }
 }
 
