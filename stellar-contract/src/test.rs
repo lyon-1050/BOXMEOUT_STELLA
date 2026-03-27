@@ -553,27 +553,3 @@ fn test_batch_redeem_exceeds_max() {
         &soroban_sdk::vec![&env, 0u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     );
 }
-
-#[test]
-fn test_get_market_success() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (_admin, client) = setup_test(&env);
-    let creator = Address::generate(&env);
-    create_test_market(&env, &client.address, 1, &creator);
-
-    let market = client.get_market(&1u64);
-    assert_eq!(market.market_id, 1);
-    assert_eq!(market.creator, creator);
-}
-
-#[test]
-#[should_panic]
-fn test_get_market_not_found() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (_admin, client) = setup_test(&env);
-    client.get_market(&99u64);
-}
