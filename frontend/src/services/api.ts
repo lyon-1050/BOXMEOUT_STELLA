@@ -81,7 +81,9 @@ export async function fetchBetsByMarket(market_id: string): Promise<Bet[]> {
  * Returns the full Portfolio object.
  */
 export async function fetchPortfolio(address: string): Promise<Portfolio> {
-  // TODO: implement
+  const res = await fetch(`${API_BASE}/api/portfolio/${address}`);
+  if (!res.ok) throw new Error(`fetchPortfolio failed: ${res.status}`);
+  return res.json();
 }
 
 /**
