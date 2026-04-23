@@ -1,25 +1,83 @@
+'use client';
+
 // ============================================================
 // BOXMEOUT — Portfolio Page (/portfolio)
 // Shows the connected user's betting history and pending claims.
 // ============================================================
 
-/**
- * Portfolio page for the connected wallet.
- *
- * Sections:
- *   1. Stats row: Total Staked / Total Won / Total Lost / Win Rate
- *   2. "Pending Claims" section — bets ready to claim (highlight in gold)
- *   3. "Active Bets" — bets in open/locked markets
- *   4. "Bet History" — BetHistoryTable with all past bets
- *
- * Uses usePortfolio() hook.
- *
- * If wallet not connected:
- *   - Show full-page "Connect your wallet to view your portfolio" prompt
- *
- * If portfolio is empty:
- *   - Show "No bets yet — find a fight to bet on" with link to Home
- */
+import Link from 'next/link';
+import { useWallet } from '../../hooks/useWallet';
+import { usePortfolio } from '../../hooks/usePortfolio';
+import { ConnectPrompt } from '../../components/ui/ConnectPrompt';
+import { BetHistoryTable } from '../../components/bet/BetHistoryTable';
+
 export default function PortfolioPage(): JSX.Element {
-  // TODO: implement
+  const { isConnected } = useWallet();
+  const { portfolio, isLoading, claimWinnings, claimRefund } = usePortfolio();
+
+  if (!isConnected) {
+    return (
+      <main className="max-w-2xl mx-auto mt-20 px-4">
+        <ConnectPrompt message="Connect your Freighter wallet to view your portfolio" />
+      </main>
+    );
+  }
+
+  if (isLoading) {
+    return <main className="text-center mt-20 text-gray-400">Loading portfolio…</main>;
+  }
+
+  if (!portfolio || (portfolio.active_bets.length === 0 && portfolio.past_bets.length === 0 && portfolio.pending_claims.length === 0)) {
+    return (
+      <main className="text-center mt-20 space-y-3">
+        <p className="text-gray-400">No bets yet — find a fight to bet on</p>
+        <Link href="/" className="text-amber-400 hover:text-amber-300 text-sm">Browse markets →</Link>
+      </main>
+    );
+  }
+
+  const winRate = portfolio.total_staked_xlm > 0
+    ? ((portfolio.total_won_xlm / portfolio.total_staked_xlm) * 100).toFixed(1)
+    : '0.0';
+
+  return (
+    <main className="max-w-4xl mx-auto px-4 py-8 space-y-8">
+      {/* Stats row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {[
+          { label: 'Total Staked', value: `${portfolio.total_staked_xlm.toFixed(2)} XLM` },
+          { label: 'Total Won', value: `${portfolio.total_won_xlm.toFixed(2)} XLM` },
+          { label: 'Total Lost', value: `${portfolio.total_lost_xlm.toFixed(2)} XLM` },
+          { label: 'Win Rate', value: `${winRate}%` },
+        ].map(({ label, value }) => (
+          <div key={label} className="bg-gray-900 rounded-xl p-4 text-center">
+            <p className="text-xs text-gray-400">{label}</p>
+            <p className="text-lg font-semibold text-white mt-1">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Pending Claims */}
+      {portfolio.pending_claims.length > 0 && (
+        <section>
+          <h2 className="text-amber-400 font-semibold mb-3">Pending Claims</h2>
+          <BetHistoryTable bets={portfolio.pending_claims} onClaim={claimWinnings} onRefund={claimRefund} />
+        </section>
+      )}
+
+      {/* Active Bets */}
+      {portfolio.active_bets.length > 0 && (
+        <section>
+          <h2 className="text-white font-semibold mb-3">Active Bets</h2>
+          <BetHistoryTable bets={portfolio.active_bets} onClaim={claimWinnings} onRefund={claimRefund} />
+        </section>
+      )}
+
+      {/* Bet History */}
+      <section>
+        <h2 className="text-white font-semibold mb-3">Bet History</h2>
+        <BetHistoryTable bets={portfolio.past_bets} onClaim={claimWinnings} onRefund={claimRefund} />
+      </section>
+    </main>
+  );
 }

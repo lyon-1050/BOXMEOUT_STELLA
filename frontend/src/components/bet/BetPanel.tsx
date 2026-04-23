@@ -6,6 +6,7 @@ import { useBet } from '../../hooks/useBet';
 import { useWallet } from '../../hooks/useWallet';
 import { BetConfirmModal } from './BetConfirmModal';
 import { TxStatusToast } from '../ui/TxStatusToast';
+import { ConnectPrompt } from '../ui/ConnectPrompt';
 import { useAppStore } from '../../store';
 
 interface BetPanelProps {
@@ -19,7 +20,7 @@ const SIDES: { value: BetSide; label: (a: string, b: string) => string }[] = [
 ];
 
 export function BetPanel({ market }: BetPanelProps): JSX.Element {
-  const { isConnected, connect } = useWallet();
+  const { isConnected } = useWallet();
   const { side, setSide, amount, setAmount, estimatedPayout, isSubmitting, txStatus, submitBet, reset } = useBet(market);
   const setTxStatus = useAppStore((s) => s.setTxStatus);
   const [showModal, setShowModal] = useState(false);
@@ -29,14 +30,7 @@ export function BetPanel({ market }: BetPanelProps): JSX.Element {
   const canSubmit = isConnected && !!side && isAmountValid && !isSubmitting && market.status === 'open';
 
   if (!isConnected) {
-    return (
-      <div className="rounded-xl bg-gray-900 p-6 text-center space-y-3">
-        <p className="text-gray-400 text-sm">Connect your wallet to place a bet</p>
-        <button onClick={connect} className="w-full py-2 rounded-lg bg-amber-500 hover:bg-amber-400 font-semibold text-black">
-          Connect Wallet to Bet
-        </button>
-      </div>
-    );
+    return <ConnectPrompt />;
   }
 
   if (market.status !== 'open') {
