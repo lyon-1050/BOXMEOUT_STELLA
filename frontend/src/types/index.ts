@@ -77,3 +77,49 @@ export interface TxStatus {
   status: 'idle' | 'pending' | 'success' | 'error';
   error: string | null;
 }
+
+// ─── Governance ──────────────────────────────────────────────────────────────
+
+export type ProposalType = 
+  | 'fee_rate' 
+  | 'add_token' 
+  | 'remove_token' 
+  | 'max_discount_rate';
+
+export interface CreateProposalParams {
+  type: ProposalType;
+  /** Depending on the type, this could be a number (bps) or a string (address) */
+  value: string | number;
+  description: string;
+}
+
+export type ProposalStatus = 'Active' | 'Passed' | 'Failed' | 'Executed';
+
+export type VoteType = 'for' | 'against' | 'abstain';
+
+export interface Proposal {
+  id: string;
+  type: ProposalType;
+  value: string | number;
+  description: string;
+  status: ProposalStatus;
+  proposer: string;
+  votesFor: number;
+  votesAgainst: number;
+  votesAbstain: number;
+  createdAt: string; // ISO 8601 timestamp
+  expiresAt: string; // ISO 8601 timestamp
+}
+
+// ─── Invoices ────────────────────────────────────────────────────────────────
+
+export type InvoiceStatus = 'Pending' | 'Funded' | 'Paid';
+
+export interface Invoice {
+  id: string;
+  freelancer: string;
+  payer: string;
+  amount: number;
+  dueDate: string; // ISO 8601 timestamp
+  status: InvoiceStatus;
+}

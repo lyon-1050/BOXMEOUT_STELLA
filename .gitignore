@@ -1,0 +1,101 @@
+# ============================================================
+# BOXMEOUT — Root .gitignore
+# Covers: Node.js (backend / indexer), Next.js (frontend),
+#         Rust / Soroban (contracts), Docker, tooling
+# ============================================================
+
+# ─── Environment & Secrets ───────────────────────────────────
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+.contract-addresses.env
+
+# ─── Node / npm / yarn / pnpm ────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm
+.yarn/
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+.pnp.*
+package-lock.json.bak
+
+# ─── TypeScript ──────────────────────────────────────────────
+*.tsbuildinfo
+dist/
+build/
+
+# ─── Next.js (frontend) ──────────────────────────────────────
+.next/
+out/
+.vercel
+
+# ─── Rust / Cargo (contracts) ────────────────────────────────
+target/
+**/*.rs.bk
+Cargo.lock
+
+# ─── Soroban / Stellar tooling ───────────────────────────────
+.soroban/
+*.wasm
+*.optimized.wasm
+
+# ─── SQLite (indexer) ────────────────────────────────────────
+indexer/data/*.db
+indexer/data/*.db-shm
+indexer/data/*.db-wal
+*.sqlite
+*.sqlite3
+
+# ─── Logs ────────────────────────────────────────────────────
+logs/
+*.log
+*.log.*
+
+# ─── Test coverage & reports ─────────────────────────────────
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+playwright/.cache/
+
+# ─── Docker ──────────────────────────────────────────────────
+.docker/
+
+# ─── Editor & OS ─────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── Misc ────────────────────────────────────────────────────
+*.cache
+.cache/
+tmp/
+.tmp/
