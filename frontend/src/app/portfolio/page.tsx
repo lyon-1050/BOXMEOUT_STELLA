@@ -1,3 +1,5 @@
+'use client';
+
 // ============================================================
 // BOXMEOUT — Portfolio Page (/portfolio)
 // Shows the connected user's betting history and pending claims.
