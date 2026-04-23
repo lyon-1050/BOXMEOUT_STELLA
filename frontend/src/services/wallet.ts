@@ -12,7 +12,7 @@ import {
   nativeToScVal,
   xdr,
 } from '@stellar/stellar-sdk';
-import type { BetSide } from '../types';
+import type { BetSide, CreateProposalParams, VoteType } from '../types';
 
 const NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? 'testnet';
 const HORIZON_URL =
@@ -159,6 +159,75 @@ export async function createMarket(params: CreateMarketParams): Promise<string> 
     nativeToScVal(xlmToStroops(params.maxBetXlm), { type: 'i128' }),
     nativeToScVal(params.feeBps, { type: 'u32' }),
     nativeToScVal(params.lockBeforeMinutes, { type: 'u32' }),
+  ]);
+}
+
+export async function createProposal(params: CreateProposalParams): Promise<string> {
+  const govAddress = process.env.NEXT_PUBLIC_GOVERNANCE_CONTRACT_ADDRESS;
+  if (!govAddress) throw new Error('NEXT_PUBLIC_GOVERNANCE_CONTRACT_ADDRESS not set');
+  
+  // The exact arguments depend on the contract, we mock the basic structure
+  // 'create_proposal' might take: type_id (u32), value (scval), description (string)
+  // We represent the type as an integer for the contract here
+  let typeInt = 0;
+  let scValue: xdr.ScVal;
+  
+  switch(params.type) {
+    case 'fee_rate':
+      typeInt = 1;
+      scValue = nativeToScVal(params.value, { type: 'u32' });
+      break;
+    case 'add_token':
+      typeInt = 2;
+      scValue = nativeToScVal(params.value, { type: 'address' });
+      break;
+    case 'remove_token':
+      typeInt = 3;
+      scValue = nativeToScVal(params.value, { type: 'address' });
+      break;
+    case 'max_discount_rate':
+      typeInt = 4;
+      scValue = nativeToScVal(params.value, { type: 'u32' });
+      break;
+    default:
+      throw new Error('Invalid proposal type');
+  }
+
+  return buildAndSubmit(govAddress, 'create_proposal', [
+    nativeToScVal(typeInt, { type: 'u32' }),
+    scValue,
+    nativeToScVal(params.description, { type: 'string' })
+  ]);
+}
+
+export async function voteProposal(proposalId: string, vote: VoteType): Promise<string> {
+  const govAddress = process.env.NEXT_PUBLIC_GOVERNANCE_CONTRACT_ADDRESS;
+  if (!govAddress) throw new Error('NEXT_PUBLIC_GOVERNANCE_CONTRACT_ADDRESS not set');
+  
+  // Mapping 'for'=1, 'against'=2, 'abstain'=3
+  const voteInt = vote === 'for' ? 1 : vote === 'against' ? 2 : 3;
+
+  return buildAndSubmit(govAddress, 'vote', [
+    nativeToScVal(proposalId, { type: 'string' }),
+    nativeToScVal(voteInt, { type: 'u32' })
+  ]);
+}
+
+export async function executeProposal(proposalId: string): Promise<string> {
+  const govAddress = process.env.NEXT_PUBLIC_GOVERNANCE_CONTRACT_ADDRESS;
+  if (!govAddress) throw new Error('NEXT_PUBLIC_GOVERNANCE_CONTRACT_ADDRESS not set');
+
+  return buildAndSubmit(govAddress, 'execute_proposal', [
+    nativeToScVal(proposalId, { type: 'string' })
+  ]);
+}
+
+export async function markPaid(invoiceId: string): Promise<string> {
+  const contractAddress = process.env.NEXT_PUBLIC_INVOICE_CONTRACT_ADDRESS;
+  if (!contractAddress) throw new Error('NEXT_PUBLIC_INVOICE_CONTRACT_ADDRESS not set');
+
+  return buildAndSubmit(contractAddress, 'mark_paid', [
+    nativeToScVal(invoiceId, { type: 'string' })
   ]);
 }
 
